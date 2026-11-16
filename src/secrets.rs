@@ -92,7 +92,7 @@ pub fn read_required_secret(location: &SecretsLocation, name: &str) -> Result<St
 
     value.ok_or_else(|| {
         AppError::new(&format!(
-            "secret '{}' is not in {}; run simple-alert register",
+            "secret '{}' is not in {}; run simple-alert register <service>",
             name,
             location.store_path().display(),
         ))

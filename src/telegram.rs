@@ -15,6 +15,10 @@ const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_HONORED_RETRY_AFTER: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_TOO_MANY_REQUESTS: u16 = 429;
+// Telegram answers 401 for an unknown bot token and 404 for a malformed one.
+const HTTP_UNAUTHORIZED: u16 = 401;
+const HTTP_NOT_FOUND: u16 = 404;
+const GET_ME_METHOD: &str = "getMe";
 const GROUP_CHAT_TYPES: [&str; 3] = ["channel", "group", "supergroup"];
 
 #[derive(Clone)]
@@ -68,11 +72,18 @@ impl TelegramClient {
         Ok(())
     }
 
-    pub fn get_me(&self) -> Result<BotUser, AppError> {
-        let result: Value = self.call("getMe", &serde_json::json!({}))?;
+    pub fn check_token(&self) -> Result<TokenCheck, AppError> {
+        let settled_call: SettledCall = self.settle(GET_ME_METHOD, &serde_json::json!({}));
+        let get_me_outcome: GetMeOutcome = classify_get_me_outcome(&settled_call.outcome);
+
+        if get_me_outcome == GetMeOutcome::TokenRejected {
+            return Ok(TokenCheck::Rejected);
+        }
+
+        let result: Value = self.finish(GET_ME_METHOD, settled_call)?;
         let bot_user: BotUser = serde_json::from_value(result)?;
 
-        Ok(bot_user)
+        Ok(TokenCheck::Accepted(bot_user))
     }
 
     pub fn get_updates(&self) -> Result<Vec<Update>, AppError> {
@@ -82,6 +93,12 @@ impl TelegramClient {
     }
 
     fn call(&self, method: &str, body: &Value) -> Result<Value, AppError> {
+        let settled_call: SettledCall = self.settle(method, body);
+
+        self.finish(method, settled_call)
+    }
+
+    fn settle(&self, method: &str, body: &Value) -> SettledCall {
         let mut attempt_number: u32 = 1;
 
         loop {
@@ -89,9 +106,17 @@ impl TelegramClient {
             let decision: RetryDecision = decide_retry(&outcome);
 
             let delay: Duration = match decision {
-                RetryDecision::Stop => return self.finish(method, outcome, attempt_number),
+                RetryDecision::Stop => {
+                    return SettledCall {
+                        outcome,
+                        attempt_count: attempt_number,
+                    };
+                }
                 RetryDecision::RetryAfter(_) if attempt_number >= MAX_ATTEMPTS => {
-                    return self.finish(method, outcome, attempt_number);
+                    return SettledCall {
+                        outcome,
+                        attempt_count: attempt_number,
+                    };
                 }
                 RetryDecision::RetryAfter(delay) => delay,
             };
@@ -119,14 +144,14 @@ impl TelegramClient {
         }
     }
 
-    fn finish(&self, method: &str, outcome: AttemptOutcome, attempt_count: u32) -> Result<Value, AppError> {
-        let failure_message: String = match outcome {
+    fn finish(&self, method: &str, settled_call: SettledCall) -> Result<Value, AppError> {
+        let failure_message: String = match settled_call.outcome {
             AttemptOutcome::Delivered(result) => return Ok(result),
             AttemptOutcome::NetworkFailure(detail) => format!("could not reach Telegram for {}: {}", method, detail),
             AttemptOutcome::Rejected(rejection) => render_rejection(method, &rejection),
         };
 
-        let attempts_note: String = match attempt_count {
+        let attempts_note: String = match settled_call.attempt_count {
             1 => String::new(),
             count => format!(" (after {} attempts)", count),
         };
@@ -155,6 +180,33 @@ pub enum AttemptOutcome {
     Delivered(Value),
     NetworkFailure(String),
     Rejected(TelegramRejection),
+}
+
+struct SettledCall {
+    outcome: AttemptOutcome,
+    attempt_count: u32,
+}
+
+pub enum TokenCheck {
+    Accepted(BotUser),
+    Rejected,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum GetMeOutcome {
+    BotFound,
+    TokenRejected,
+    Failed,
+}
+
+pub fn classify_get_me_outcome(outcome: &AttemptOutcome) -> GetMeOutcome {
+    match outcome {
+        AttemptOutcome::Delivered(_) => GetMeOutcome::BotFound,
+        AttemptOutcome::Rejected(rejection) if [HTTP_UNAUTHORIZED, HTTP_NOT_FOUND].contains(&rejection.status) => {
+            GetMeOutcome::TokenRejected
+        }
+        AttemptOutcome::Rejected(_) | AttemptOutcome::NetworkFailure(_) => GetMeOutcome::Failed,
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -345,6 +397,19 @@ mod tests {
     #[test]
     fn decide_retry_stops_after_another_client_error() {
         assert_eq!(decide_retry(&get_rejection(400, None)), RetryDecision::Stop);
+    }
+
+    #[test]
+    fn classify_get_me_outcome_treats_unauthorized_and_not_found_as_a_rejected_token() {
+        assert_eq!(classify_get_me_outcome(&get_rejection(401, None)), GetMeOutcome::TokenRejected);
+        assert_eq!(classify_get_me_outcome(&get_rejection(404, None)), GetMeOutcome::TokenRejected);
+    }
+
+    #[test]
+    fn classify_get_me_outcome_does_not_treat_a_network_failure_as_a_rejected_token() {
+        let outcome: AttemptOutcome = AttemptOutcome::NetworkFailure("connection failed".to_string());
+
+        assert_eq!(classify_get_me_outcome(&outcome), GetMeOutcome::Failed);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 name = "simple-alert"
 version = "0.1.0"
 edition = "2024"
-description = "Posts alerts from services on a personal server to a Telegram channel."
+description = "Posts alerts from services on a personal server to Telegram channels, one per service."
 license = "MIT"
 repository = "https://github.com/zacharysiegel/simple-alert"
 

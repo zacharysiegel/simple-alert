@@ -14,7 +14,7 @@ use simple_alert::error::AppError;
 use simple_alert::send;
 
 #[derive(Parser)]
-#[command(name = "simple-alert", version, about = "Posts an alert to a Telegram channel.")]
+#[command(name = "simple-alert", version, about = "Posts a service's alert to that service's Telegram channel.")]
 struct Cli {
     #[arg(
         long,
@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    #[command(about = "Post one alert to the configured chat")]
+    #[command(about = "Post one alert to the service's chat")]
     Send {
         #[arg(long, value_name = "NAME", help = "Letters, digits, '-' and '_'")]
         service: String,
@@ -41,10 +41,16 @@ enum Command {
         #[arg(value_name = "MESSAGE")]
         message: String,
     },
-    #[command(about = "Post \"INFO [simple-alert] test alert\" to the configured chat")]
-    Test,
-    #[command(about = "Store the bot token, choose the chat and write the config, interactively")]
-    Register,
+    #[command(about = "Post \"INFO [<service>] test alert\" to the service's chat")]
+    Test {
+        #[arg(value_name = "SERVICE", help = "A service registered with simple-alert register")]
+        service: String,
+    },
+    #[command(about = "Choose the service's chat, storing the bot token if none is stored, interactively")]
+    Register {
+        #[arg(value_name = "SERVICE", help = "Letters, digits, '-' and '_'")]
+        service: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -95,11 +101,15 @@ fn run() -> Result<(), AppError> {
 
             send::send_alert(&config_path, &alert)
         }
-        Command::Test => {
-            let test_alert: Alert = send::create_test_alert()?;
+        Command::Test {
+            service,
+        } => {
+            let test_alert: Alert = send::create_test_alert(&service)?;
 
             send::send_alert(&config_path, &test_alert)
         }
-        Command::Register => register::run(&config_path, cli.config.as_deref()),
+        Command::Register {
+            service,
+        } => register::run(&config_path, cli.config.as_deref(), &service),
     }
 }

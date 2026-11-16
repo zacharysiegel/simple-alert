@@ -1,6 +1,6 @@
 # simple-alert
 
-A command-line tool and Rust library that posts an alert from a service to one Telegram chat through a bot.
+A command-line tool and Rust library that posts an alert from a service to that service's Telegram chat through one bot.
 
 ## Install
 
@@ -10,35 +10,48 @@ cargo install --git https://github.com/zacharysiegel/simple-alert
 
 ## Setup
 
-1. In Telegram, send `/newbot` to [@BotFather](https://t.me/BotFather) and keep the token it returns.
-2. Create a channel (a group also works).
-3. Add the bot to the channel as an administrator allowed to post messages.
-4. Run `simple-alert register`. It asks for the token (hidden) and checks it with Telegram, asks you to post any message in the channel and press Enter, lists the channels and groups the bot has seen for you to pick by number (or asks for the chat id if it saw none), asks before replacing a different token already in the store, writes the config and the token, and offers to send a test alert.
+Create the bot once: in Telegram, send `/newbot` to [@BotFather](https://t.me/BotFather) and keep the token it returns.
 
-`register` creates `~/.config/simple-alert/` and its files readable only by you. When the config has no `[secrets]` section it generates a secr key, and refuses to run if the store already holds secrets, since those were encrypted with another key. Rerunning it rewrites the config with the newly chosen chat. Telegram's `getUpdates`, which lists the chats, does not work while the bot has a webhook set.
+For each service:
+
+1. Create a channel (a group also works).
+2. Add the bot to the channel as an administrator allowed to post messages.
+3. Run `simple-alert register <service>`.
+
+`register <service>`:
+
+1. If the service already has a chat, shows it and asks `Replace it? [y/N]`; declining changes nothing.
+2. Uses the stored bot token if there is one; otherwise asks for it (hidden). Checks the token with Telegram and names the bot. If Telegram rejects the stored token, offers to enter a new one; a network error stops register.
+3. Asks you to post any message in the service's channel and press Enter, then lists the channels and groups the bot has seen for you to pick by number or by typing a chat id (or asks for the chat id if it saw none). Chats another service already uses are labeled; a chat may serve several services.
+4. Asks before replacing a different token already in the store, writes the service's chat to the config and the token to the store if it is new, and offers to send a test alert. The config is read again just before writing, so changes made meanwhile are kept; if they changed this service's chat, it asks again before replacing it.
+
+`register` creates `~/.config/simple-alert/` and its files readable only by you. When the config has no `[secrets]` section it generates a secr key, and refuses to run if the store already holds secrets, since those were encrypted with another key. Telegram's `getUpdates`, which lists the chats, does not work while the bot has a webhook set.
 
 ## Commands
 
-- `simple-alert send --service <name> --level <info|warning|error> <message>`: posts `<LEVEL> [<service>] <message>`, for example `ERROR [xost] tweet id 2 was marked failed`.
-    - Service name: letters, digits, `-` and `_`.
+- `simple-alert send --service <name> --level <info|warning|error> <message>`: posts `<LEVEL> [<service>] <message>` to the service's chat, for example `ERROR [xost] tweet id 2 was marked failed`.
+    - Service name: letters, digits, `-` and `_`. A service without a `[services.<name>]` table is rejected.
     - Message: trimmed; an empty message is rejected. Text over Telegram's 4096-character limit is cut and ends with `[truncated]`.
     - Retries: up to 3 attempts on a network error, HTTP 5xx, or HTTP 429. A 429 waits the `retry_after` Telegram gives, and fails at once if that exceeds 30 seconds. Other 4xx responses fail at once.
-- `simple-alert test`: posts `INFO [simple-alert] test alert` the same way.
-- `simple-alert register`: interactive setup (see Setup).
+- `simple-alert test <service>`: posts `INFO [<service>] test alert` the same way.
+- `simple-alert register <service>`: interactive setup (see Setup).
 - `--config <file>` (any command): config path, default `~/.config/simple-alert/config.toml`.
 
 ## Config
 
 ```toml
-[telegram]
-chat_id = -1001234567890
-
 [secrets]
 store = "~/.config/simple-alert/secrets.yaml"
 key = "<base64 secr key>"
+
+[services.xost]
+chat_id = -1001234567890
+
+[services.backup]
+chat_id = -1009876543210
 ```
 
-The bot token is the `telegram_bot_token` entry of the [secr](https://crates.io/crates/secr) store. `~/` is expanded in `store`. Missing keys, unknown keys, a non-integer or zero `chat_id`, and a `key` that does not decode to 32 bytes are rejected.
+The bot token is the `telegram_bot_token` entry of the [secr](https://crates.io/crates/secr) store. `~/` is expanded in `store`. Missing keys, unknown keys, an invalid service name, a non-integer or zero `chat_id`, and a `key` that does not decode to 32 bytes are rejected. A config with the former `[telegram]` section is rejected; running `register` for each service replaces it.
 
 ## Exit codes
 
